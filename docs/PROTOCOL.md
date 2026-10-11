@@ -47,6 +47,14 @@ match and value plausibility.)
 - **Automatic search**: while a pressure change is happening
   (inflating/deflating), the app binds the first unknown sensor heard.
 
+**Sensor identity.** Every sensor carries a unique 3-byte ID — the 6
+hex-character code engraved on it / QR card — present in every
+advertisement. A fresh sensor's *position* byte may just be a default value
+(sensors not yet bound to positions can all report the same byte): the
+reference firmware detects duplicates and falls back to ordering by
+ascending sensor ID (deterministic layout), with an optional pinned
+ID→position table in the sketch for guaranteed corners.
+
 ## 3. Relay mode (optional — statically reconstructed, untested)
 
 Based on code observations; only relevant if a relay box is used.

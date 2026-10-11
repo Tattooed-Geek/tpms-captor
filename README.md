@@ -34,6 +34,21 @@ alarms.
  +----------------+
 ```
 
+### Sensor identity & positioning
+
+Each sensor carries a unique 3-byte ID (the 6 hex characters engraved on
+it), present in every frame. Display position priority:
+
+1. **Pinned table** — optional `PINNED[]` list at the top of each sketch
+   (sensor ID → corner). Fill it once with the four IDs and every power-on
+   shows the right tire in the right corner immediately.
+2. **Reported position byte** (0x80–0x83) — used when trustworthy. Sensors
+   never bound to positions may all report the same default byte; the
+   firmware detects duplicates and switches to…
+3. **Ascending sensor ID** — deterministic fallback: identical layout at
+   every boot, immune to packet arrival order. Identify which corner is
+   which by inflating one tire at a time, then pin (option 1) to lock it.
+
 ## Hardware
 
 | Part | Notes |

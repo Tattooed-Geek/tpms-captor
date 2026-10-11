@@ -19,6 +19,10 @@
  *    [21..24] temperature       LE32 / 100    -> degC      (hex 42..50)
  *    [25]     battery           / 10 -> volts              (hex 50..52)
  *
+ *  Positioning : sensors are identified by their unique 6-hex ID. Display
+ *  position priority : PINNED[] table (optional) > reported position byte
+ *  > ascending sensor ID (deterministic across boots) — see arrange().
+ *
  *  Target : ESP32 DevKit (WROOM-32)
  *  Libs   : MD_MAX72xx + MD_Parola (majicdesigns) via the library manager
  *
@@ -72,6 +76,7 @@
 struct Tire {
   bool     used     = false;
   String   id       = "";
+  uint32_t idNum    = 0;       // numeric 3-byte sensor ID (for ordering)
   uint8_t  slot     = 0xFF;    // 0..3 (0xFF = unknown)
   float    kPa      = 0.0f;
   float    degC     = 0.0f;
@@ -150,34 +155,117 @@ static void updateAlarm() {
   }
 }
 
-/* ----------------------------------------------------------- BLE / scan */
-static void upsertTire(uint8_t slot, const String& id, float kPa, float degC, float volts, int8_t rssi) {
-  int idx = -1;
-  // 1) find by slot (priority), 2) by id, 3) first free
-  if (slot < MAX_TIRES) idx = slot;
-  if (idx >= 0 && tires[idx].used && tires[idx].id.length() && tires[idx].id != id) {
-    // the slot is taken by another sensor : look for the id elsewhere
-    idx = -1;
-  }
-  if (idx < 0 || !tires[idx].used) {
-    for (int i = 0; i < MAX_TIRES; i++)
-      if (tires[i].used && tires[i].id == id) { idx = i; break; }
-  }
-  if (idx < 0 || (!tires[idx].used && slot >= MAX_TIRES)) {
-    for (int i = 0; i < MAX_TIRES; i++)
-      if (!tires[i].used) { idx = i; break; }
-  }
-  if (idx < 0 || idx >= MAX_TIRES) return; // full : ignore
+/* ------------------------------------------- sensor identity & positioning */
+/* Optional pinning : sensor ID -> display position (0=FL, 1=FR, 2=RL, 3=RR).
+ * Fill in the four IDs once identified (serial [TPMS] lines + inflating one
+ * tire at a time) : pinned sensors always show in their corner, from the
+ * very first frame, every boot. */
+struct PinEntry { uint32_t id; uint8_t slot; };
+/* Add one row per sensor once its ID is known, e.g. :
+ *   { 0xaabbc0, 0 },   // AABB C0 -> front-left
+ * The row below is a placeholder (real IDs are 3 bytes — it never matches). */
+static const PinEntry PINNED[] = {
+  { 0xFFFFFFFFu, 0xFF },
+};
+#define PINNED_N ((int)(sizeof(PINNED) / sizeof(PINNED[0])))
+static int pinSlotFor(uint32_t idNum) {
+  for (int i = 0; i < PINNED_N; i++)
+    if (PINNED[i].id == idNum && PINNED[i].slot < MAX_TIRES) return PINNED[i].slot;
+  return -1;
+}
 
+/* Layout mode : each sensor normally shows at its reported position byte.
+ * As soon as two sensors claim the SAME position (proving the field
+ * unusable — e.g. sensors never bound to positions), switch to ID mode :
+ * ascending sensor IDs — deterministic, immune to packet arrival order,
+ * identical layout at every boot. Set FORCE_ID_ORDER to 1 to use ascending
+ * IDs right away. */
+#define FORCE_ID_ORDER 0
+static bool idMode = FORCE_ID_ORDER;
+
+static int idxByIdNum(uint32_t idNum) {
+  for (int i = 0; i < MAX_TIRES; i++)
+    if (tires[i].used && tires[i].idNum == idNum) return i;
+  return -1;
+}
+
+/* Rebuilt after every frame : place the pool sensors into display
+ * positions. Priority : pinned > reported position (unless idMode) >
+ * ascending sensor ID. */
+static void arrange() {
+  if (!idMode) {
+    for (int i = 0; i < MAX_TIRES && !idMode; i++) {
+      if (!tires[i].used || tires[i].slot > 3) continue;
+      if (pinSlotFor(tires[i].idNum) >= 0) continue;
+      for (int j = i + 1; j < MAX_TIRES; j++) {
+        if (!tires[j].used || tires[j].slot > 3) continue;
+        if (pinSlotFor(tires[j].idNum) >= 0) continue;
+        if (tires[j].slot == tires[i].slot) { idMode = true; break; }
+      }
+    }
+  }
+
+  int  order[MAX_TIRES]    = { -1, -1, -1, -1 };  // display pos -> pool idx
+  bool posTaken[MAX_TIRES] = { false, false, false, false };
+  bool placed[MAX_TIRES]   = { false, false, false, false };
+
+  /* 1) pinned sensors first */
+  for (int i = 0; i < MAX_TIRES; i++) {
+    if (!tires[i].used) continue;
+    int ps = pinSlotFor(tires[i].idNum);
+    if (ps >= 0 && !posTaken[ps]) {
+      order[ps] = i; posTaken[ps] = true; placed[i] = true;
+    }
+  }
+  /* 2) reported positions, when trustworthy */
+  if (!idMode) {
+    for (int i = 0; i < MAX_TIRES; i++) {
+      if (!tires[i].used || placed[i] || tires[i].slot > 3) continue;
+      int ps = tires[i].slot;
+      if (!posTaken[ps]) { order[ps] = i; posTaken[ps] = true; placed[i] = true; }
+    }
+  }
+  /* 3) the rest : ascending sensor ID into the positions left */
+  for (;;) {
+    int best = -1;
+    for (int i = 0; i < MAX_TIRES; i++) {
+      if (!tires[i].used || placed[i]) continue;
+      if (best < 0 || tires[i].idNum < tires[best].idNum) best = i;
+    }
+    if (best < 0) break;
+    int ps = 0; while (ps < MAX_TIRES && posTaken[ps]) ps++;
+    if (ps >= MAX_TIRES) break;
+    order[ps] = best; posTaken[ps] = true; placed[best] = true;
+  }
+
+  /* apply the new arrangement */
+  Tire old[MAX_TIRES];
+  for (int i = 0; i < MAX_TIRES; i++) old[i] = tires[i];
+  for (int pos = 0; pos < MAX_TIRES; pos++) {
+    if (order[pos] >= 0) tires[pos] = old[order[pos]];
+    else { tires[pos].used = false; tires[pos].id = ""; tires[pos].idNum = 0; tires[pos].slot = 0xFF; }
+  }
+}
+
+/* update the matching sensor entry (or create one), then re-layout */
+static void placeFrame(uint32_t idNum, const String& id, uint8_t slotByte,
+                       float kPa, float degC, float volts, int8_t rssi) {
+  int idx = idxByIdNum(idNum);
+  if (idx < 0) {
+    for (int i = 0; i < MAX_TIRES; i++) if (!tires[i].used) { idx = i; break; }
+    if (idx < 0) return;                       // pool full : 4 distinct sensors max
+    tires[idx].used  = true;
+    tires[idx].idNum = idNum;
+    tires[idx].id    = id;
+  }
   Tire& t = tires[idx];
-  t.used     = true;
-  t.id       = id;
-  t.slot     = slot;
+  t.slot     = (slotByte >= 0x80 && slotByte <= 0x83) ? (uint8_t)(slotByte - 0x80) : 0xFF;
   t.kPa      = kPa;
   t.degC     = degC;
   t.volts    = volts;
   t.rssi     = rssi;
   t.lastSeen = millis();
+  arrange();
 }
 
 class ScanCB : public BLEAdvertisedDeviceCallbacks {
@@ -208,8 +296,10 @@ class ScanCB : public BLEAdvertisedDeviceCallbacks {
 
       /* plausibility filter (protects against false positives) */
       if (kPa >= 0.0f && kPa <= 1500.0f && degC >= -60.0f && degC <= 150.0f && v >= 0.0f && v <= 5.0f) {
-        uint8_t slot = (slotByte >= 0x80 && slotByte <= 0x83) ? (slotByte - 0x80) : 0xFF;
-        upsertTire(slot, String(idbuf), kPa, degC, v, dev.getRSSI());
+        uint32_t idNum = ((uint32_t)getByte(p, n, OFF_ID) << 16)
+                       | ((uint32_t)getByte(p, n, OFF_ID + 1) << 8)
+                       |  (uint32_t)getByte(p, n, OFF_ID + 2);
+        placeFrame(idNum, String(idbuf), slotByte, kPa, degC, v, dev.getRSSI());
         Serial.printf("[TPMS] id=%s slot=0x%02x %.1fkPa %.1fC %.1fV rssi=%d\n",
                       idbuf, slotByte, kPa, degC, v, dev.getRSSI());
       }
