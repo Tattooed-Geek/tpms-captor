@@ -1,5 +1,5 @@
 // Native test of the LCD screen composition (buffers, degree glyph, alignment)
-// and of the positioning algorithm (pinned > reported position > ascending ID).
+// and of the positioning algorithm (pinned > ascending ID > reported position).
 // Build : g++ -O0 -o /tmp/lcd_test lcd_render_test.cpp && /tmp/lcd_test
 #include <cstdio>
 #include <cstdint>
@@ -92,6 +92,7 @@ static void arrangeT(const TEntry in[4], TEntry out[4]) {
     int ps = in[i].slot;
     if (!posT[ps]) { order[ps] = i; posT[ps] = true; done[i] = true; }
   }
+  static const int FILL[4] = { 0, 2, 1, 3 };   // FL, RL, FR, RR
   for (;;) {
     int best = -1;
     for (int i = 0; i < 4; i++) {
@@ -99,8 +100,9 @@ static void arrangeT(const TEntry in[4], TEntry out[4]) {
       if (best < 0 || in[i].id < in[best].id) best = i;
     }
     if (best < 0) break;
-    int ps = 0; while (ps < 4 && posT[ps]) ps++;
-    if (ps >= 4) break;
+    int ps = -1;
+    for (int k = 0; k < 4; k++) if (!posT[FILL[k]]) { ps = FILL[k]; break; }
+    if (ps < 0) break;
     order[ps] = best; posT[ps] = true; done[best] = true;
   }
   for (int p = 0; p < 4; p++) out[p] = (order[p] >= 0) ? in[order[p]] : TEntry{-1, -1};
@@ -163,19 +165,19 @@ int main() {
   TEntry out6[4];
   arrangeT(in6, out6);
   checkInt("layout: id-mode triggered", gIdMode ? 1 : 0, 1);
-  checkInt("layout: ID order 1", out6[0].id, 10);
-  checkInt("layout: ID order 2", out6[1].id, 20);
-  checkInt("layout: ID order 3", out6[2].id, 35);
-  checkInt("layout: ID order 4", out6[3].id, 50);
+  checkInt("layout: ID order 1 (FL)", out6[0].id, 10);
+  checkInt("layout: ID order 2 (RL)", out6[2].id, 20);
+  checkInt("layout: ID order 3 (FR)", out6[1].id, 35);
+  checkInt("layout: ID order 4 (RR)", out6[3].id, 50);
 
   /* case 7 : no position reported -> ascending-ID order */
   gIdMode = false;
   const TEntry in7[4] = {{50,-1},{20,-1},{-1,-1},{-1,-1}};
   TEntry out7[4];
   arrangeT(in7, out7);
-  checkInt("layout: no-report order 1", out7[0].id, 20);
-  checkInt("layout: no-report order 2", out7[1].id, 50);
-  checkInt("layout: no-report slot free", out7[2].id, -1);
+  checkInt("layout: no-report order 1 (FL)", out7[0].id, 20);
+  checkInt("layout: no-report order 2 (RL)", out7[2].id, 50);
+  checkInt("layout: no-report FR free", out7[1].id, -1);
 
   /* case 8 : pinned sensor keeps its corner */
   gIdMode = false; gPinIds[0] = 50; gPinSlots[0] = 3; gPinN = 1;

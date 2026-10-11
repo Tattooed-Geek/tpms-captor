@@ -20,8 +20,9 @@
  *    [25]     battery           / 10 -> volts              (hex 50..52)
  *
  *  Positioning : sensors are identified by their unique 6-hex ID. Display
- *  position priority : PINNED[] table (optional) > reported position byte
- *  > ascending sensor ID (deterministic across boots) — see arrange().
+ *  position priority : PINNED[] table (optional) > ascending sensor ID
+ *  (default mode : smallest ID -> FL, then RL, FR, RR — deterministic
+ *  across boots) > reported position byte (opt-in) — see arrange().
  *
  *  Target : ESP32 DevKit (WROOM-32)
  *  Libs   : MD_MAX72xx + MD_Parola (majicdesigns) via the library manager
@@ -174,14 +175,19 @@ static int pinSlotFor(uint32_t idNum) {
   return -1;
 }
 
-/* Layout mode : each sensor normally shows at its reported position byte.
- * As soon as two sensors claim the SAME position (proving the field
- * unusable — e.g. sensors never bound to positions), switch to ID mode :
- * ascending sensor IDs — deterministic, immune to packet arrival order,
- * identical layout at every boot. Set FORCE_ID_ORDER to 1 to use ascending
- * IDs right away. */
-#define FORCE_ID_ORDER 0
+/* Display order mode. FORCE_ID_ORDER 1 (DEFAULT) : sensors are placed by
+ * ascending sensor ID — convention : smallest ID -> FL, then RL, FR, RR
+ * (left column top->bottom, then right column). Deterministic from the
+ * moment all four have been heard, identical at every boot, immune to
+ * packet arrival order. FORCE_ID_ORDER 0 : prefer the position byte each
+ * sensor reports (0x80..0x83) while it looks trustworthy; switches to
+ * ascending-ID order as soon as two sensors report the SAME position. */
+#define FORCE_ID_ORDER 1
 static bool idMode = FORCE_ID_ORDER;
+
+/* Fill order for ascending sensor IDs : FL (top-left), RL (bottom-left),
+ * FR (top-right), RR (bottom-right). */
+static const uint8_t ID_FILL[MAX_TIRES] = { 0, 2, 1, 3 };
 
 static int idxByIdNum(uint32_t idNum) {
   for (int i = 0; i < MAX_TIRES; i++)
@@ -225,7 +231,8 @@ static void arrange() {
       if (!posTaken[ps]) { order[ps] = i; posTaken[ps] = true; placed[i] = true; }
     }
   }
-  /* 3) the rest : ascending sensor ID into the positions left */
+  /* 3) the rest : ascending sensor ID into the positions left (fill order :
+   * left column top->bottom, then right column — see ID_FILL) */
   for (;;) {
     int best = -1;
     for (int i = 0; i < MAX_TIRES; i++) {
@@ -233,8 +240,10 @@ static void arrange() {
       if (best < 0 || tires[i].idNum < tires[best].idNum) best = i;
     }
     if (best < 0) break;
-    int ps = 0; while (ps < MAX_TIRES && posTaken[ps]) ps++;
-    if (ps >= MAX_TIRES) break;
+    int ps = -1;
+    for (int k = 0; k < MAX_TIRES; k++)
+      if (!posTaken[ID_FILL[k]]) { ps = ID_FILL[k]; break; }
+    if (ps < 0) break;
     order[ps] = best; posTaken[ps] = true; placed[best] = true;
   }
 

@@ -42,12 +42,14 @@ it), present in every frame. Display position priority:
 1. **Pinned table** — optional `PINNED[]` list at the top of each sketch
    (sensor ID → corner). Fill it once with the four IDs and every power-on
    shows the right tire in the right corner immediately.
-2. **Reported position byte** (0x80–0x83) — used when trustworthy. Sensors
-   never bound to positions may all report the same default byte; the
-   firmware detects duplicates and switches to…
-3. **Ascending sensor ID** — deterministic fallback: identical layout at
-   every boot, immune to packet arrival order. Identify which corner is
-   which by inflating one tire at a time, then pin (option 1) to lock it.
+2. **Ascending sensor ID** (default) — convention: smallest ID takes the
+   top-left tire (FL), then RL, FR, RR. Once all four sensors have been
+   seen, the layout is fully determined: identical at every boot, immune
+   to packet arrival order. Identify which sensor is which physically by
+   inflating one tire at a time, then pin (option 1) to lock the corners.
+3. **Reported position byte** (opt-in — set `FORCE_ID_ORDER` to 0) —
+   prefer the corner each sensor announces (0x80–0x83); automatically
+   falls back to ID order when the field proves unreliable.
 
 ## Hardware
 

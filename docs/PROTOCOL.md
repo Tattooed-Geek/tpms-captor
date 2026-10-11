@@ -50,10 +50,13 @@ match and value plausibility.)
 **Sensor identity.** Every sensor carries a unique 3-byte ID — the 6
 hex-character code engraved on it / QR card — present in every
 advertisement. A fresh sensor's *position* byte may just be a default value
-(sensors not yet bound to positions can all report the same byte): the
-reference firmware detects duplicates and falls back to ordering by
-ascending sensor ID (deterministic layout), with an optional pinned
-ID→position table in the sketch for guaranteed corners.
+(sensors not yet bound to positions can all report the same byte). By
+default the reference firmware therefore orders the sensors by ascending
+ID (smallest ID → front-left, then rear-left, front-right, rear-right —
+deterministic once all four have been heard), with an optional pinned
+ID→position table in the sketch for guaranteed corners, and an opt-in mode
+(`FORCE_ID_ORDER 0`) that prefers the announced position bytes when they
+look trustworthy.
 
 ## 3. Relay mode (optional — statically reconstructed, untested)
 
