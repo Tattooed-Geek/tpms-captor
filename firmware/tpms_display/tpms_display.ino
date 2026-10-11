@@ -184,13 +184,15 @@ class ScanCB : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
     const uint8_t* p = dev.getPayload();
     size_t n = dev.getPayloadLength();
-    if (!p || n < (size_t)MIN_LEN) return;
+    if (!p || n == 0) return;
 
     uint8_t m0 = getByte(p, n, OFF_MARKER);
     uint8_t m1 = getByte(p, n, OFF_MARKER + 1);
     uint8_t slotByte = getByte(p, n, OFF_SLOT);
 
-    if (m0 == 0x00 && m1 == 0x01) {
+    /* decode only full-length frames carrying the family marker; anything
+     * else (including short frames) is logged by the sniffer below */
+    if (n >= (size_t)MIN_LEN && m0 == 0x00 && m1 == 0x01) {
       /* recognized TPMS frame */
       char idbuf[8];
       snprintf(idbuf, sizeof(idbuf), "%02x%02x%02x",
